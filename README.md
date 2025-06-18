@@ -11,10 +11,8 @@ Organize.py 是一个用于整理当前目录下所有 MP4 文件的 Python 脚�
 
 ## 运行方法
 
-双击 Organize.py 即可
+双击 `Organize.py` 即可
 
-
-生成的 .exe 文件将位于 `dist` 文件夹中。
 
 ## 许可证
 

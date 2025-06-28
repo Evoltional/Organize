@@ -3,6 +3,12 @@ import shutil
 import re
 
 
+def extract_author(filename):
+    """从文件名中提取作者名（方括号内的部分）"""
+    match = re.search(r'\[([^\[\]]+)\]', filename)
+    return match.group(1) if match else None
+
+
 def find_common_prefix(str_list):
     """查找字符串列表中最长共同前缀"""
     if not str_list:
@@ -17,8 +23,13 @@ def find_common_prefix(str_list):
 
 
 def clean_folder_name(name):
-    """清理文件夹名称，移除末尾的特殊字符"""
-    # 先移除版本号、集数等数字标识
+    """清理文件夹名称，保留方括号内的作者名"""
+    # 先尝试提取作者名
+    author = extract_author(name)
+    if author:
+        return f"[{author}]"
+
+    # 没有作者名时，移除版本号、集数等数字标识
     name = re.sub(r'\s*[0-9]+\s*$', '', name)
 
     # 再移除末尾的特殊字符和空格
@@ -68,17 +79,29 @@ def main():
     # 按文件名排序
     mp4_files.sort()
 
-    # 分组处理
-    groups = {}
-    moved_set = set()  # 跟踪已移动的文件
+    # 第一步：按作者分组
+    author_groups = {}
     for file in mp4_files:
+        author = extract_author(file)
+        if author:
+            group_key = f"[{author}]"
+            if group_key not in author_groups:
+                author_groups[group_key] = []
+            author_groups[group_key].append(file)
+
+    # 第二步：处理非作者分组的文件（使用共同前缀策略）
+    non_author_files = [f for f in mp4_files if not extract_author(f)]
+    prefix_groups = {}
+    moved_set = set()  # 跟踪已移动的文件
+
+    for file in non_author_files:
         name_no_ext = os.path.splitext(file)[0]
 
         # 寻找最佳匹配组
         best_match = None
         max_common = 0
 
-        for key in list(groups.keys()):  # 使用list避免字典修改问题
+        for key in list(prefix_groups.keys()):
             common = os.path.commonprefix([key, name_no_ext])
             # 要求共同部分至少2个字符
             if len(common) > max_common and len(common) >= 2:
@@ -87,26 +110,33 @@ def main():
 
         # 找到匹配组则加入，否则创建新组
         if best_match:
-            groups[best_match].append(file)
+            prefix_groups[best_match].append(file)
         else:
-            groups[name_no_ext] = [file]
+            prefix_groups[name_no_ext] = [file]
+
+    # 合并所有分组
+    all_groups = {**author_groups, **prefix_groups}
 
     # 创建文件夹并移动分组文件
     group_moved = 0
     folder_count = 0
-    for key, files in list(groups.items()):
-        if len(files) < 2:
-            continue  # 单个文件稍后处理
+    for key, files in list(all_groups.items()):
+        # 作者分组直接使用作者名作为文件夹名
+        if key in author_groups:
+            folder_name = key
+        else:
+            # 计算组内所有文件名的共同前缀
+            common_prefix = find_common_prefix([os.path.splitext(f)[0] for f in files])
+            if not common_prefix:
+                continue
+            # 清理文件夹名
+            folder_name = clean_folder_name(common_prefix)
+            if not folder_name:
+                continue
 
-        # 计算组内所有文件名的共同前缀
-        common_prefix = find_common_prefix([os.path.splitext(f)[0] for f in files])
-        if not common_prefix:
-            continue
-
-        # 清理文件夹名
-        folder_name = clean_folder_name(common_prefix)
-        if not folder_name:
-            continue
+        # 避免文件夹名过长
+        if len(folder_name) > 50:
+            folder_name = folder_name[:47] + "..."
 
         # 创建文件夹
         try:
@@ -126,7 +156,7 @@ def main():
             except Exception as e:
                 print(f"移动文件 '{file}' 失败: {e}")
 
-    # 处理单个文件
+    # 处理单个文件（未被分组的文件）
     single_files = [f for f in mp4_files if f not in moved_set]
     single_moved = process_single_files(single_files)
 

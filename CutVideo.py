@@ -39,12 +39,17 @@ def trim_video(input_file, output_file, start_seconds, end_seconds):
         print(f"⚠️ 跳过：裁剪时间无效（总时长: {duration:.1f}秒）")
         return False
 
-    # 构建ffmpeg命令
+    # 计算裁剪段时长
+    segment_duration = actual_end - start_seconds
+
+    # 构建更精确的ffmpeg命令（解决开头卡顿问题）
     cmd = [
-        'ffmpeg', '-y', '-i', input_file,
-        '-ss', str(start_seconds),
-        '-to', str(actual_end),
+        'ffmpeg', '-y',
+        '-ss', str(start_seconds),  # 关键：先定位再输入
+        '-i', input_file,
+        '-to', str(segment_duration),
         '-c', 'copy',  # 直接复制流（无损快速）
+        '-avoid_negative_ts', 'make_zero',  # 修复时间戳问题
         output_file
     ]
 

@@ -42,25 +42,52 @@ def trim_video(input_file, output_file, start_seconds, end_seconds):
     # 计算裁剪段时长
     segment_duration = actual_end - start_seconds
 
-    # 构建更精确的ffmpeg命令（解决开头卡顿问题）
-    cmd = [
-        'ffmpeg', '-y',
-        '-ss', str(start_seconds),  # 关键：先定位再输入
-        '-i', input_file,
-        '-to', str(segment_duration),
-        '-c', 'copy',  # 直接复制流（无损快速）
-        '-avoid_negative_ts', 'make_zero',  # 修复时间戳问题
-        output_file
-    ]
+    # 关键帧精确定位技术 - 解决音画不同步问题
+    # 当起始时间接近0时使用精确编码模式
+    if start_seconds < 0.5:
+        print("🔧 使用精确编码模式保证音画同步")
+        cmd = [
+            'ffmpeg', '-y',
+            '-i', input_file,
+            '-ss', str(start_seconds),
+            '-to', str(actual_end),
+            '-c:v', 'libx264',  # 使用视频编码保证同步
+            '-c:a', 'aac',  # 使用音频编码保证同步
+            '-preset', 'fast',  # 平衡速度和质量
+            '-crf', '23',  # 恒定质量模式
+            '-avoid_negative_ts', 'make_zero',
+            output_file
+        ]
+    else:
+        # 常规快速裁剪模式
+        cmd = [
+            'ffmpeg', '-y',
+            '-ss', str(start_seconds),  # 关键帧定位
+            '-i', input_file,
+            '-to', str(segment_duration),
+            '-c', 'copy',  # 直接复制流
+            '-avoid_negative_ts', 'make_zero',
+            '-noaccurate_seek',  # 优化关键帧查找
+            output_file
+        ]
 
     try:
         start_time = time.time()
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        process = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         process_time = time.time() - start_time
+
+        # 检查输出文件是否存在
+        if not os.path.exists(output_file) or os.path.getsize(output_file) == 0:
+            print("❌ 输出文件创建失败，请检查FFmpeg安装")
+            return False
+
         print(f"✅ 成功处理 ({process_time:.1f}秒)")
         return True
     except subprocess.CalledProcessError as e:
         print(f"❌ 裁剪失败: {e}")
+        # 打印FFmpeg错误详情
+        print("FFmpeg错误输出:")
+        print(e.stderr.decode('utf-8') if e.stderr else "无错误详情")
         return False
 
 
@@ -81,12 +108,13 @@ def main():
 
     # 用户界面
     print("=" * 60)
-    print("视频批量裁剪工具".center(60))
+    print("视频批量裁剪工具 (关键帧优化版)".center(60))
     print("=" * 60)
     print("说明:")
     print("- 请按格式输入时间（例如：片头2分30秒 → 输入 2 30）")
     print("- 处理后的视频将保存到 'Cut' 文件夹")
     print("- 支持格式: " + ", ".join(valid_extensions))
+    print("- 自动处理音画同步问题")
     print("=" * 60)
 
     # 获取用户输入
@@ -131,6 +159,7 @@ def main():
 
     # 确认操作
     print(f"\n将裁剪: 片头 {start_min}分{start_sec}秒, 片尾 {end_min}分{end_sec}秒")
+    print("注意：接近0秒的裁剪将自动使用精确模式保证音画同步")
     confirm = input("开始处理? (Y/N): ").strip().lower()
     if confirm != 'y':
         print("操作已取消")
@@ -147,7 +176,7 @@ def main():
 
     for i, video in enumerate(video_files, 1):
         base, ext = os.path.splitext(video)
-        output_file = os.path.join(output_dir, f"{base}{ext}")
+        output_file = os.path.join(output_dir, f"{base}_cut{ext}")
 
         print(f"\n[{i}/{total_files}] 处理: {video}")
 
@@ -172,4 +201,12 @@ def main():
 
 
 if __name__ == "__main__":
+    # 检查FFmpeg是否可用
+    try:
+        subprocess.run(['ffmpeg', '-version'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        print("❌ 未找到FFmpeg，请先安装FFmpeg并添加到系统路径")
+        input("按回车退出...")
+        sys.exit(1)
+
     main()

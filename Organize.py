@@ -5,7 +5,7 @@ import re
 
 def extract_author(filename):
     """从文件名中提取作者名（方括号内的部分）"""
-    match = re.search(r'\[([^\[\]]+)\]', filename)
+    match = re.search(r'\[([^\[\]]+)]', filename)
     return match.group(1) if match else None
 
 
@@ -149,7 +149,7 @@ def main():
         # 移动文件
         for file in files:
             try:
-                shutil.move(file, os.path.join(folder_name, file))
+                shutil.move(file, os.path.join(folder_name, file))  # type: ignore
                 group_moved += 1
                 moved_set.add(file)
                 print(f"移动分组文件 '{file}' -> '{folder_name}/'")

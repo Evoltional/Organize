@@ -3,10 +3,10 @@ import shutil
 import re
 
 
-def extract_author(filename):
-    """从文件名中提取作者名（方括号内的部分）"""
-    match = re.search(r'\[([^\[\]]+)]', filename)
-    return match.group(1) if match else None
+def extract_authors(filename):
+    """从文件名中提取所有作者名（方括号内的部分）"""
+    matches = re.findall(r'\[([^\[\]]+)]', filename)
+    return matches if matches else []
 
 
 def find_common_prefix(str_list):
@@ -24,10 +24,11 @@ def find_common_prefix(str_list):
 
 def clean_folder_name(name):
     """清理文件夹名称，保留方括号内的作者名"""
-    # 先尝试提取作者名
-    author = extract_author(name)
-    if author:
-        return f"[{author}]"
+    # 先尝试提取所有作者名
+    authors = extract_authors(name)
+    if authors:
+        # 将所有作者名用空格连接
+        return " ".join(authors)
 
     # 没有作者名时，移除版本号、集数等数字标识
     name = re.sub(r'\s*[0-9]+\s*$', '', name)
@@ -79,18 +80,19 @@ def main():
     # 按文件名排序
     mp4_files.sort()
 
-    # 第一步：按作者分组
+    # 第一步：按作者分组（支持多个作者）
     author_groups = {}
     for file in mp4_files:
-        author = extract_author(file)
-        if author:
-            group_key = f"[{author}]"
+        authors = extract_authors(file)
+        if authors:
+            # 使用所有作者名的组合作为分组键
+            group_key = " ".join(sorted(authors))  # 排序确保一致性
             if group_key not in author_groups:
                 author_groups[group_key] = []
             author_groups[group_key].append(file)
 
     # 第二步：处理非作者分组的文件（使用共同前缀策略）
-    non_author_files = [f for f in mp4_files if not extract_author(f)]
+    non_author_files = [f for f in mp4_files if not extract_authors(f)]
     prefix_groups = {}
     moved_set = set()  # 跟踪已移动的文件
 
@@ -121,7 +123,7 @@ def main():
     group_moved = 0
     folder_count = 0
     for key, files in list(all_groups.items()):
-        # 作者分组直接使用作者名作为文件夹名
+        # 作者分组直接使用作者名组合作为文件夹名
         if key in author_groups:
             folder_name = key
         else:

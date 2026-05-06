@@ -1,112 +1,125 @@
 import os
 import re
 import shutil
-from pathlib import Path
+import glob
 from collections import defaultdict
 
+def clean_folder_name(name):
+    # 替换 Windows 非法字符
+    name = re.sub(r'[<>:"/\\|?*]', '_', name)
+    name = name.strip()
+    # 去除结尾的点（Windows不允许文件和目录名以点结尾）
+    while name.endswith('.'):
+        name = name[:-1]
+    if not name:
+        name = "未分类"
+    return name
+
 def main():
-    # 工作目录：脚本所在的文件夹
-    base_dir = Path(__file__).resolve().parent
-    mp4_files = list(base_dir.glob("*.mp4"))
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    mp4_files = glob.glob(os.path.join(script_dir, "*.mp4"))
     if not mp4_files:
-        print("没有找到任何 .mp4 文件，无事可做。")
+        print("当前文件夹没有找到任何 mp4 文件。")
         input("按回车键退出...")
         return
 
-    # 分为“有方括号”和“无方括号”两类
-    bracket_files = []
-    normal_files = []
+    brackets = defaultdict(list)
+    others = []
+
+    # 分离方括号开头的文件
     for f in mp4_files:
-        if f.stem.startswith('['):
-            bracket_files.append(f)
+        name_no_ext = os.path.splitext(os.path.basename(f))[0]
+        m = re.match(r'^\[([^\]]+)\]', name_no_ext)
+        if m:
+            folder = m.group(1).strip()
+            brackets[folder].append(f)
         else:
-            normal_files.append(f)
+            others.append(f)
 
-    # ---------- 处理带方括号的文件 ----------
-    for f in bracket_files:
-        match = re.match(r'^\[([^\]]+)\]', f.stem)
-        if match:
-            folder_name = match.group(1).strip()
-        else:
-            # 理论上不会走到这里，但以防万一
-            folder_name = f.stem
-        target_dir = base_dir / folder_name
-        target_dir.mkdir(exist_ok=True)
-        dest = target_dir / f.name
-        if dest.exists():
-            print(f"跳过（目标已存在）：{f.name} -> {target_dir}")
-        else:
-            shutil.move(str(f), str(dest))
-            print(f"移动：{f.name} -> {target_dir}")
+    # 对非方括号文件进行聚类
+    def is_boundary(name, n):
+        if n >= len(name):
+            return True
+        return not name[n].isalpha()
 
-    # ---------- 处理没有方括号的文件 ----------
-    if not normal_files:
-        print("整理完成！")
-        input("按回车键退出...")
-        return
+    n = len(others)
+    if n > 0:
+        names = [os.path.splitext(os.path.basename(p))[0] for p in others]
+        parent = list(range(n))
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+        def union(x, y):
+            rx, ry = find(x), find(y)
+            if rx != ry:
+                parent[ry] = rx
 
-    # 为每个文件生成一个“候选系列名”
-    file_candidates = []  # [(Path, candidate_str)]
-    for f in normal_files:
-        stem = f.stem
-        # 模式1：末尾是 "分隔符 + 数字"  → 系列名是分隔符之前的部分
-        # 模式2：末尾是 "第x话/話"        → 系列名是“第”之前的部分
-        # 以上都不满足 → 用整个 stem 作为候选
-        m1 = re.match(r'^(.+?)[\s\-_]+(\d+)$', stem)
-        m2 = re.match(r'^(.+?)[\s\-_]*第(\d+)[話话]$', stem)
-        if m1:
-            cand = m1.group(1)
-        elif m2:
-            cand = m2.group(1)
-        else:
-            cand = stem
-        file_candidates.append((f, cand))
+        for i in range(n):
+            for j in range(i + 1, n):
+                ni, nj = names[i], names[j]
+                lcp_len = 0
+                min_len = min(len(ni), len(nj))
+                while lcp_len < min_len and ni[lcp_len] == nj[lcp_len]:
+                    lcp_len += 1
+                if lcp_len == 0:
+                    continue
+                if is_boundary(ni, lcp_len) and is_boundary(nj, lcp_len):
+                    union(i, j)
 
-    # 按候选系列名分组
-    groups = defaultdict(list)
-    for f, cand in file_candidates:
-        groups[cand].append(f)
+        groups = defaultdict(list)
+        for i, p in enumerate(others):
+            groups[find(i)].append(p)
 
-    # 合并可能属于同一系列的组（共享前缀且边界合理）
-    # 先收集所有不同的候选系列名，按长度升序
-    unique_candidates = sorted(groups.keys(), key=lambda x: len(x))
-    merged = {}  # 最终确定的系列名 -> 文件列表
-    used = set()
-
-    for short in unique_candidates:
-        if short in used:
-            continue
-        # 选择比 short 长且以 short 开头、且边界合理的候选
-        same_series = [short]
-        for long in unique_candidates:
-            if long in used or long == short:
-                continue
-            if long.startswith(short):
-                # short 必须是“完整的词”：长候选在 short 之后的首字符必须是分隔符或数字
-                next_char = long[len(short)]
-                if next_char.isdigit() or not next_char.isalnum():
-                    same_series.append(long)
-                    used.add(long)
-        used.add(short)
-        merged[short] = []
-        for s in same_series:
-            merged[short].extend(groups[s])
-
-    # 开始移动文件
-    for folder_name, file_list in merged.items():
-        target_dir = base_dir / folder_name
-        target_dir.mkdir(exist_ok=True)
-        for f in file_list:
-            dest = target_dir / f.name
-            if dest.exists():
-                print(f"跳过（目标已存在）：{f.name} -> {target_dir}")
+        cluster_folders = defaultdict(list)
+        for comp in groups.values():
+            if len(comp) == 1:
+                name = os.path.splitext(os.path.basename(comp[0]))[0]
+                digit_match = re.search(r'\d', name)
+                if digit_match:
+                    prefix = name[:digit_match.start()].rstrip()
+                    folder = prefix if prefix else name
+                else:
+                    folder = name.strip()
             else:
-                shutil.move(str(f), str(dest))
-                print(f"移动：{f.name} -> {target_dir}")
+                comp_names = [os.path.splitext(os.path.basename(p))[0] for p in comp]
+                lcp = comp_names[0]
+                for nxt in comp_names[1:]:
+                    i = 0
+                    while i < min(len(lcp), len(nxt)) and lcp[i] == nxt[i]:
+                        i += 1
+                    lcp = lcp[:i]
+                    if not lcp:
+                        break
+                lcp = lcp.rstrip()
+                folder = lcp if lcp else "未分类"
+            cluster_folders[folder].extend(comp)
 
-    print("整理完成！")
+        all_folders = defaultdict(list)
+        for folder, files in brackets.items():
+            all_folders[folder].extend(files)
+        for folder, files in cluster_folders.items():
+            all_folders[folder].extend(files)
+    else:
+        all_folders = brackets
+
+    # 移动文件
+    for folder, files in all_folders.items():
+        safe_folder = clean_folder_name(folder)  # 关键修复
+        target_dir = os.path.join(script_dir, safe_folder)
+        os.makedirs(target_dir, exist_ok=True)
+
+        for src in files:
+            dst = os.path.join(target_dir, os.path.basename(src))
+            try:
+                shutil.move(src, dst)
+                print(f"移动: {os.path.basename(src)} → {safe_folder}/")
+            except Exception as e:
+                print(f"失败: {os.path.basename(src)} 未能移动，错误: {e}")
+
+    print("\n整理完成！")
     input("按回车键退出...")
-    pause(20)
 
 if __name__ == "__main__":
     main()

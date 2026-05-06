@@ -1,173 +1,112 @@
 import os
-import shutil
 import re
-
-
-def extract_authors(filename):
-    """从文件名中提取所有作者名（方括号内的部分）"""
-    matches = re.findall(r'\[([^\[\]]+)]', filename)
-    return matches if matches else []
-
-
-def find_common_prefix(str_list):
-    """查找字符串列表中最长共同前缀"""
-    if not str_list:
-        return ""
-    prefix = str_list[0]
-    for s in str_list[1:]:
-        while not s.startswith(prefix) and prefix:
-            prefix = prefix[:-1]
-        if not prefix:
-            break
-    return prefix
-
-
-def clean_folder_name(name):
-    """清理文件夹名称，保留方括号内的作者名"""
-    # 先尝试提取所有作者名
-    authors = extract_authors(name)
-    if authors:
-        # 将所有作者名用空格连接
-        return " ".join(authors)
-
-    # 没有作者名时，移除版本号、集数等数字标识
-    name = re.sub(r'\s*[0-9]+\s*$', '', name)
-
-    # 再移除末尾的特殊字符和空格
-    cleaned = re.sub(r'[ 　～~\-_.,;:!?()\[\]【】（）「」”“"\'*#@&$%^+=|\\<>/`]+$', '', name)
-
-    # 如果清理后为空，则返回原始名称
-    return cleaned.strip() if cleaned.strip() else name.strip()
-
-
-def process_single_files(files):
-    """处理单个文件，为每个文件创建独立文件夹"""
-    moved_count = 0
-    for file in files:
-        # 获取文件名（不含扩展名）
-        name_no_ext = os.path.splitext(file)[0]
-
-        # 清理文件夹名
-        folder_name = clean_folder_name(name_no_ext)
-
-        # 避免文件夹名过长
-        if len(folder_name) > 50:
-            folder_name = folder_name[:47] + "..."
-
-        try:
-            # 创建文件夹
-            os.makedirs(folder_name, exist_ok=True)
-
-            # 移动文件
-            shutil.move(file, os.path.join(folder_name, file))
-            print(f"移动单个文件 '{file}' -> '{folder_name}/'")
-            moved_count += 1
-        except Exception as e:
-            print(f"移动单个文件 '{file}' 失败: {e}")
-
-    return moved_count
-
+import shutil
+from pathlib import Path
+from collections import defaultdict
 
 def main():
-    # 获取当前目录下所有mp4文件
-    mp4_files = [f for f in os.listdir()
-                 if os.path.isfile(f) and f.lower().endswith('.mp4')]
-
+    # 工作目录：脚本所在的文件夹
+    base_dir = Path(__file__).resolve().parent
+    mp4_files = list(base_dir.glob("*.mp4"))
     if not mp4_files:
-        print("没有找到MP4文件")
+        print("没有找到任何 .mp4 文件，无事可做。")
+        input("按回车键退出...")
         return
 
-    # 按文件名排序
-    mp4_files.sort()
-
-    # 第一步：按作者分组（支持多个作者）
-    author_groups = {}
-    for file in mp4_files:
-        authors = extract_authors(file)
-        if authors:
-            # 使用所有作者名的组合作为分组键
-            group_key = " ".join(sorted(authors))  # 排序确保一致性
-            if group_key not in author_groups:
-                author_groups[group_key] = []
-            author_groups[group_key].append(file)
-
-    # 第二步：处理非作者分组的文件（使用共同前缀策略）
-    non_author_files = [f for f in mp4_files if not extract_authors(f)]
-    prefix_groups = {}
-    moved_set = set()  # 跟踪已移动的文件
-
-    for file in non_author_files:
-        name_no_ext = os.path.splitext(file)[0]
-
-        # 寻找最佳匹配组
-        best_match = None
-        max_common = 0
-
-        for key in list(prefix_groups.keys()):
-            common = os.path.commonprefix([key, name_no_ext])
-            # 要求共同部分至少2个字符
-            if len(common) > max_common and len(common) >= 2:
-                max_common = len(common)
-                best_match = key
-
-        # 找到匹配组则加入，否则创建新组
-        if best_match:
-            prefix_groups[best_match].append(file)
+    # 分为“有方括号”和“无方括号”两类
+    bracket_files = []
+    normal_files = []
+    for f in mp4_files:
+        if f.stem.startswith('['):
+            bracket_files.append(f)
         else:
-            prefix_groups[name_no_ext] = [file]
+            normal_files.append(f)
 
-    # 合并所有分组
-    all_groups = {**author_groups, **prefix_groups}
-
-    # 创建文件夹并移动分组文件
-    group_moved = 0
-    folder_count = 0
-    for key, files in list(all_groups.items()):
-        # 作者分组直接使用作者名组合作为文件夹名
-        if key in author_groups:
-            folder_name = key
+    # ---------- 处理带方括号的文件 ----------
+    for f in bracket_files:
+        match = re.match(r'^\[([^\]]+)\]', f.stem)
+        if match:
+            folder_name = match.group(1).strip()
         else:
-            # 计算组内所有文件名的共同前缀
-            common_prefix = find_common_prefix([os.path.splitext(f)[0] for f in files])
-            if not common_prefix:
-                continue
-            # 清理文件夹名
-            folder_name = clean_folder_name(common_prefix)
-            if not folder_name:
-                continue
+            # 理论上不会走到这里，但以防万一
+            folder_name = f.stem
+        target_dir = base_dir / folder_name
+        target_dir.mkdir(exist_ok=True)
+        dest = target_dir / f.name
+        if dest.exists():
+            print(f"跳过（目标已存在）：{f.name} -> {target_dir}")
+        else:
+            shutil.move(str(f), str(dest))
+            print(f"移动：{f.name} -> {target_dir}")
 
-        # 避免文件夹名过长
-        if len(folder_name) > 50:
-            folder_name = folder_name[:47] + "..."
+    # ---------- 处理没有方括号的文件 ----------
+    if not normal_files:
+        print("整理完成！")
+        input("按回车键退出...")
+        return
 
-        # 创建文件夹
-        try:
-            os.makedirs(folder_name, exist_ok=True)
-            folder_count += 1
-        except OSError as e:
-            print(f"创建文件夹 '{folder_name}' 失败: {e}")
+    # 为每个文件生成一个“候选系列名”
+    file_candidates = []  # [(Path, candidate_str)]
+    for f in normal_files:
+        stem = f.stem
+        # 模式1：末尾是 "分隔符 + 数字"  → 系列名是分隔符之前的部分
+        # 模式2：末尾是 "第x话/話"        → 系列名是“第”之前的部分
+        # 以上都不满足 → 用整个 stem 作为候选
+        m1 = re.match(r'^(.+?)[\s\-_]+(\d+)$', stem)
+        m2 = re.match(r'^(.+?)[\s\-_]*第(\d+)[話话]$', stem)
+        if m1:
+            cand = m1.group(1)
+        elif m2:
+            cand = m2.group(1)
+        else:
+            cand = stem
+        file_candidates.append((f, cand))
+
+    # 按候选系列名分组
+    groups = defaultdict(list)
+    for f, cand in file_candidates:
+        groups[cand].append(f)
+
+    # 合并可能属于同一系列的组（共享前缀且边界合理）
+    # 先收集所有不同的候选系列名，按长度升序
+    unique_candidates = sorted(groups.keys(), key=lambda x: len(x))
+    merged = {}  # 最终确定的系列名 -> 文件列表
+    used = set()
+
+    for short in unique_candidates:
+        if short in used:
             continue
+        # 选择比 short 长且以 short 开头、且边界合理的候选
+        same_series = [short]
+        for long in unique_candidates:
+            if long in used or long == short:
+                continue
+            if long.startswith(short):
+                # short 必须是“完整的词”：长候选在 short 之后的首字符必须是分隔符或数字
+                next_char = long[len(short)]
+                if next_char.isdigit() or not next_char.isalnum():
+                    same_series.append(long)
+                    used.add(long)
+        used.add(short)
+        merged[short] = []
+        for s in same_series:
+            merged[short].extend(groups[s])
 
-        # 移动文件
-        for file in files:
-            try:
-                shutil.move(file, os.path.join(folder_name, file))  # type: ignore
-                group_moved += 1
-                moved_set.add(file)
-                print(f"移动分组文件 '{file}' -> '{folder_name}/'")
-            except Exception as e:
-                print(f"移动文件 '{file}' 失败: {e}")
+    # 开始移动文件
+    for folder_name, file_list in merged.items():
+        target_dir = base_dir / folder_name
+        target_dir.mkdir(exist_ok=True)
+        for f in file_list:
+            dest = target_dir / f.name
+            if dest.exists():
+                print(f"跳过（目标已存在）：{f.name} -> {target_dir}")
+            else:
+                shutil.move(str(f), str(dest))
+                print(f"移动：{f.name} -> {target_dir}")
 
-    # 处理单个文件（未被分组的文件）
-    single_files = [f for f in mp4_files if f not in moved_set]
-    single_moved = process_single_files(single_files)
-
-    print(f"\n处理完成! 共移动 {group_moved + single_moved} 个文件")
-    print(f"- 创建 {folder_count} 个分组文件夹")
-    print(f"- 创建 {len(single_files)} 个独立文件夹")
-    print(f"- 移动 {group_moved} 个分组文件")
-    print(f"- 移动 {single_moved} 个独立文件")
-
+    print("整理完成！")
+    input("按回车键退出...")
+    pause(20)
 
 if __name__ == "__main__":
     main()
